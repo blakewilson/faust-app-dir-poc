@@ -1,36 +1,150 @@
-This is a [Next.js](https://nextjs.org/) project bootstrapped with [`create-next-app`](https://github.com/vercel/next.js/tree/canary/packages/create-next-app).
+# Faust App Router POC
 
-## Getting Started
+## Prerequisites
 
-First, run the development server:
+First, make sure your WordPress site has [WPGraphQL](https://wordpress.org/plugins/wp-graphql) and [FaustWP](https://wordpress.org/plugins/faustwp) installed.
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
+Make a copy of the `.env.local.sample` file and name it `.env.local`. Set the `NEXT_PUBLIC_WORDPRESS_URL` and `FAUST_SECRET_KEY`.
+
+```
+NEXT_PUBLIC_WORDPRESS_URL=http://my-site.com/
+FAUST_SECRET_KEY=xxxx
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+## Usage
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+### Data Fetching
 
-[http://localhost:3000/api/hello](http://localhost:3000/api/hello) is an endpoint that uses [Route Handlers](https://beta.nextjs.org/docs/routing/route-handlers). This endpoint can be edited in `app/api/hello/route.ts`.
+Data fetching in app router is quite simple, the experimental Apollo implementation for App Router does not require a `Provider` that wraps the app, the implementation is simply a function that returns an `apolloClient`. In our implementation, we simple call our own function and apply any plugin filters/logic needed to the `apolloClient`.
 
-This project uses [`next/font`](https://nextjs.org/docs/basic-features/font-optimization) to automatically optimize and load Inter, a custom Google Font.
+Since React Server Components are awaitable, it's as simple as:
 
-## Learn More
+```tsx
+let client = getClient();
 
-To learn more about Next.js, take a look at the following resources:
+const { data } = await client.query({
+  query: gql`
+    query GetPosts {
+      posts {
+        nodes {
+          id
+          title
+          uri
+          slug
+        }
+      }
+    }
+  `,
+});
+```
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+to fetch data. Check out `getClient` for implementation details.
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js/) - your feedback and contributions are welcome!
+### Authentication
 
-## Deploy on Vercel
+For this POC, the logic to login is not implemented, however, the goal is to use the same `useLogin`, `useLogout` and local/redirect strategies from current Faust.
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+For this demonstration, you'll want to generate a refresh token through the Faust REST endpoint, and manually add that as a cookie on your site called `${wpUrl}-rt` so that an access token can be fetched properly.
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/deployment) for more details.
+Say for instance your WP instance exists on `http://headless.local`, the cookie name to store the refresh token would be `http://headless.local-rt`.
+
+To generate a refresh token, you'll need to first generate an authorization code, which can be done through the the GraphiQL IDE with the following query:
+
+```graphql
+mutation MyMutation {
+  generateAuthorizationCode(
+    input: { username: "my_username", password: "my_password" }
+  ) {
+    clientMutationId
+    code
+    error
+  }
+}
+```
+
+This will give you a response similar to:
+
+```json
+{
+  "data": {
+    "generateAuthorizationCode": {
+      "clientMutationId": null,
+      "code": "my_code",
+      "error": null
+    }
+  }
+}
+```
+
+Then, with your `code`, create a `POST` request to the `http://my-wp-site.com/?rest_route=/faustwp/v1/authorize` endpoint (replacing `http://my-wp-site.com` with the URL to your WordPress site). Use the `code` in the body of the `POST` request:
+
+```json
+{
+  "code": "my_code"
+}
+```
+
+You should receive a response similar to:
+
+```json
+{
+  "accessToken": "my_access_token",
+  "accessTokenExpiration": 1690379081,
+  "refreshToken": "my_refresh_token",
+  "refreshTokenExpiration": 1691588381
+}
+```
+
+`my_refresh_token` is the value you save in the `${wpUrl}-rt` cookie mentioned above.
+
+A valid refresh token saved in the cookie means the user has a valid "session" and is authenticated. To make authenticated requests, two things must occur.
+
+1. Fetch the access token. This is an awaitable function that can be called via the `fetchAccessToken()` function. Once this access token is fetched, it is applied to the auth client. (Ideally this would be abstracted in the actual implementation for Faust but we are doing it manually for simplicity)
+2. Use the awaitable `getAuthClient` to get the authenticated client. This client can be used to make authenticated requests. If the returned `client` is null, it means that the user could not be properly authenticated, and a message saying the user is not authenticated or redirect should occur.
+
+### Previews
+
+Previews in App Router work quite similarly to fetching authenticated data (like in the section above). Since the data queries are the same for fetching production data and preview data, the only difference is the `asPreview` flag in your WPGraphQL queries.
+
+With this in mind, we have a function called `isPreviewMode` which accepts the `page.js`'s props, and determines if it is a preview link (has `?preview=true&p=xxx`). If it has those search properties, it returns `true`, otherwise, `false`.
+
+With this in mind, we can fetch both preview and production data in one query:
+
+```tsx
+export default async function Page(props) {
+  const postSlug = props.params.postSlug;
+  const isPreview = isPreviewMode(props);
+
+  if (isPreview) {
+    await fetchAccessToken();
+  }
+
+  let client = isPreview ? await getAuthClient() : getClient();
+
+  if (!client) {
+    return <>You are not authenticated</>;
+  }
+
+  const { data } = await client.query({
+    query: gql`
+      query GetPost($postSlug: ID!, $asPreview: Boolean!) {
+        post(id: $postSlug, idType: SLUG, asPreview: $asPreview) {
+          title
+          content
+          date
+        }
+      }
+    `,
+    variables: {
+      postSlug,
+      asPreview: Boolean(isPreview),
+    },
+    fetchPolicy: isPreview ? "no-cache" : undefined,
+  });
+
+  // render "data" here
+  return <></>;
+}
+```
+
+Refer to `[postSlug]/page.tsx` for more implementation details.
