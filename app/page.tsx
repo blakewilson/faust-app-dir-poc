@@ -1,16 +1,9 @@
-import Image from "next/image";
-import styles from "./page.module.css";
+import { getClient } from "@/faust/client";
 import { gql } from "@apollo/client";
 import Link from "next/link";
-import { getAuthClient, getClient } from "@/faust/client";
-import { fetchAccessToken } from "@/faust/auth/fetchAccessToken";
 
 export default async function Home() {
-  let client = await getAuthClient();
-
-  if (!client) {
-    return <>You need to be authenticated</>;
-  }
+  let client = getClient();
 
   const { data } = await client.query({
     query: gql`
@@ -20,26 +13,23 @@ export default async function Home() {
             id
             title
             uri
+            slug
           }
-        }
-        viewer {
-          name
         }
       }
     `,
   });
 
-  console.log(data);
-
   return (
     <main>
-      <h2>Welcome {data?.viewer?.name}</h2>
       <ul>
-        {data.posts.nodes.map((post: { title: string; uri: string }) => (
-          <li>
-            <Link href={post.uri}>{post.title}</Link>
-          </li>
-        ))}
+        {data.posts.nodes.map(
+          (post: { title: string; uri: string; slug: string }) => (
+            <li>
+              <Link href={`/${post.slug}`}>{post.title}</Link>
+            </li>
+          )
+        )}
       </ul>
     </main>
   );
