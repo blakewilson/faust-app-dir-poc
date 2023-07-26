@@ -1,5 +1,6 @@
 import { fetchAccessToken } from "@/faust/auth/fetchAccessToken";
 import { getAuthClient, getClient } from "@/faust/client";
+import { isPreviewMode } from "@/faust/previews";
 import { gql } from "@apollo/client";
 
 type PageProps = {
@@ -14,56 +15,42 @@ type PageProps = {
 
 export default async function Page(props: PageProps) {
   const postSlug = props.params.postSlug;
-  const isPreview = props?.searchParams?.preview;
+  const isPreview = isPreviewMode(props);
 
+  // Fetch the access token if is preview. Ideally this would be abstracted
+  // so the user wouldn't have to call it themselves.
   if (isPreview) {
     await fetchAccessToken();
   }
 
+  // Depending on if isPreview or not use the auth client or regular client
   let client = isPreview ? await getAuthClient() : getClient();
 
+  // Auth client will return null if not authenticated
   if (!client) {
     return <>You are not authenticated</>;
   }
 
-  let data;
-
-  if (isPreview) {
-    console.log("p id", props?.searchParams?.p);
-    const res = await client.query({
-      query: gql`
-        query GetPost($postId: ID!) {
-          post(id: $postId, idType: DATABASE_ID, asPreview: true) {
-            title
-            content
-            date
-          }
+  /**
+   * Previewing via slug/uri doesn't currently work in WPGraphQL
+   * @link https://github.com/wp-graphql/wp-graphql/issues/1673
+   */
+  const { data } = await client.query({
+    query: gql`
+      query GetPost($postSlug: ID!, $asPreview: Boolean!) {
+        post(id: $postSlug, idType: SLUG, asPreview: $asPreview) {
+          title
+          content
+          date
         }
-      `,
-      variables: {
-        postId: props?.searchParams?.p,
-      },
-    });
-
-    data = res.data;
-  } else {
-    const res = await client.query({
-      query: gql`
-        query GetPost($postSlug: ID!) {
-          post(id: $postSlug, idType: SLUG) {
-            title
-            content
-            date
-          }
-        }
-      `,
-      variables: {
-        postSlug,
-      },
-    });
-
-    data = res.data;
-  }
+      }
+    `,
+    variables: {
+      postSlug,
+      asPreview: Boolean(isPreview),
+    },
+    fetchPolicy: isPreview ? "no-cache" : undefined,
+  });
 
   return (
     <main>
