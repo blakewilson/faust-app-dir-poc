@@ -38,7 +38,7 @@ const { data } = await client.query({
 });
 ```
 
-to fetch data. Check out `getClient` for implementation details.
+to fetch data. Check out [`getClient`](https://github.com/blakewilson/faust-app-dir-poc/blob/main/faust/client/index.js#L9-L20) for implementation details.
 
 ### Authentication
 
@@ -48,7 +48,7 @@ For this demonstration, you'll want to generate a refresh token through the Faus
 
 Say for instance your WP instance exists on `http://headless.local`, the cookie name to store the refresh token would be `http://headless.local-rt`.
 
-To generate a refresh token, you'll need to first generate an authorization code, which can be done through the the GraphiQL IDE with the following query:
+To generate a refresh token, you'll need to first generate an authorization code, which can be done through the GraphiQL IDE with the following query:
 
 ```graphql
 mutation MyMutation {
@@ -76,11 +76,17 @@ This will give you a response similar to:
 }
 ```
 
-Then, with your `code`, create a `POST` request to the `http://my-wp-site.com/?rest_route=/faustwp/v1/authorize` endpoint (replacing `http://my-wp-site.com` with the URL to your WordPress site). Use the `code` in the body of the `POST` request:
+Then, with your `code`, create a `POST` request to the `http://my-wp-site.com/?rest_route=/faustwp/v1/authorize` endpoint (replacing `http://my-wp-site.com` with the URL to your WordPress site). Use the `code` in the body of the `POST` request, and set the `x-faust-secret` header with your `FAUST_SECRET_KEY`:
 
-```json
+```
+POST /?rest_route=/faustwp/v1/authorize HTTP/1.1
+Host: headless.local
+Content-Type: application/json
+x-faustwp-secret: xxxx-xxxx-xxxx-xxx
+Content-Length: 25
+
 {
-  "code": "my_code"
+    "code": "my_code"
 }
 ```
 
@@ -97,16 +103,26 @@ You should receive a response similar to:
 
 `my_refresh_token` is the value you save in the `${wpUrl}-rt` cookie mentioned above.
 
-A valid refresh token saved in the cookie means the user has a valid "session" and is authenticated. To make authenticated requests, two things must occur.
+A valid refresh token saved in the cookie means the user has a valid "session" and can be authenticated. To make authenticated requests, two things must occur:
 
-1. Fetch the access token. This is an awaitable function that can be called via the `fetchAccessToken()` function. Once this access token is fetched, it is applied to the auth client. (Ideally this would be abstracted in the actual implementation for Faust but we are doing it manually for simplicity)
-2. Use the awaitable `getAuthClient` to get the authenticated client. This client can be used to make authenticated requests. If the returned `client` is null, it means that the user could not be properly authenticated, and a message saying the user is not authenticated or redirect should occur.
+1. Fetch the access token. This is an awaitable function that can be called via the [`fetchAccessToken()`](https://github.com/blakewilson/faust-app-dir-poc/blob/main/faust/auth/fetchAccessToken.ts#L3) function. Once this access token is fetched, it is applied to the auth client. (Ideally this would be abstracted in the actual implementation for Faust but we are doing it manually for simplicity). Since App Router also has a new way to cache requests in RSCs, we could potentially get the expiration time and cache the fetch access token request until it is set to expire.
+2. Use the awaitable [`getAuthClient`](https://github.com/blakewilson/faust-app-dir-poc/blob/main/faust/client/index.js#L22) to get the authenticated client. This client can be used to make authenticated requests. If the returned `client` is `null`, it means that the user could not be properly authenticated, and a message saying the user is not authenticated or redirect should occur. Like:
+
+```tsx
+let client = await getAuthClient();
+
+if (!client) {
+  return <>You are not authenticated</>;
+}
+```
 
 ### Previews
 
+**Note: Make sure you set a refresh token discussed in the ["Authentication"](https://github.com/blakewilson/faust-app-dir-poc#authentication) section above before proceeding to this step**
+
 Previews in App Router work quite similarly to fetching authenticated data (like in the section above). Since the data queries are the same for fetching production data and preview data, the only difference is the `asPreview` flag in your WPGraphQL queries.
 
-With this in mind, we have a function called `isPreviewMode` which accepts the `page.js`'s props, and determines if it is a preview link (has `?preview=true&p=xxx`). If it has those search properties, it returns `true`, otherwise, `false`.
+With this in mind, we have a function called `isPreviewMode` which accepts the `page.js`'s props, and determines if it is a preview page (has `?preview=true&p=xxx` in the search params). If it has those search params, the function returns `true`, otherwise, `false`.
 
 With this in mind, we can fetch both preview and production data in one query:
 
@@ -147,4 +163,4 @@ export default async function Page(props) {
 }
 ```
 
-Refer to `[postSlug]/page.tsx` for more implementation details.
+Refer to [`[postSlug]/page.tsx`](https://github.com/blakewilson/faust-app-dir-poc/blob/main/app/%5BpostSlug%5D/page.tsx) for more implementation details.
